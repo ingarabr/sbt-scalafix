@@ -135,6 +135,18 @@ object ScalafixPlugin extends AutoPlugin {
     )
     def scalafixSettings: Seq[Def.Setting[_]] =
       Nil
+
+    val scalafixDiagnosticsWriter: SettingKey[Option[DiagnosticsWriter]] =
+      settingKey[Option[DiagnosticsWriter]](
+        "Optional diagnostics file writer"
+      )
+
+    val scalafixConfigCacheWriter: SettingKey[DiagnosticsCacheWriter] =
+      SettingKey(
+        "scalafixConfigCacheWriter",
+        "Implementation detail - do not use",
+        Invisible
+      )
   }
 
   import autoImport._
@@ -206,7 +218,8 @@ object ScalafixPlugin extends AutoPlugin {
     scalafixInterfaceProvider := ScalafixInterface.fromToolClasspath(
       scalafixScalaBinaryVersion.in(ThisBuild).value,
       scalafixDependencies = scalafixDependencies.in(ThisBuild).value,
-      scalafixCustomResolvers = scalafixResolvers.in(ThisBuild).value
+      scalafixCustomResolvers = scalafixResolvers.in(ThisBuild).value,
+      scalafixConfigCacheWriter = scalafixConfigCacheWriter.in(ThisBuild).value
     ),
     scalafixCompletions := new ScalafixCompletions(
       workingDirectory = baseDirectory.in(ThisBuild).value.toPath,
@@ -219,7 +232,9 @@ object ScalafixPlugin extends AutoPlugin {
       ToolClasspath,
       ScalafixInterface
     ],
-    concurrentRestrictions += Tags.exclusiveGroup(Scalafix)
+    concurrentRestrictions += Tags.exclusiveGroup(Scalafix),
+    scalafixDiagnosticsWriter := None,
+    scalafixConfigCacheWriter := new DiagnosticsCacheWriter
   )
 
   override def buildSettings: Seq[Def.Setting[_]] =
@@ -352,6 +367,10 @@ object ScalafixPlugin extends AutoPlugin {
           .in(ScalafixConfig)
           .value
           .flatMap(_.get(moduleID.key))
+      val diagnosticsWriter =
+        scalafixDiagnosticsWriter.value.getOrElse(DiagnosticsWriter.noop)
+      val diagnosticsCacheWriter = scalafixConfigCacheWriter.value
+      val targetDir = target.value
 
       if (shellArgs.rules.isEmpty && shellArgs.extra == List("--help")) {
         scalafixHelp
@@ -379,12 +398,15 @@ object ScalafixPlugin extends AutoPlugin {
           )
         val rulesThatWillRun = mainInterface.rulesThatWillRun()
         val isSemantic = rulesThatWillRun.exists(_.kind().isSemantic)
-        if (isSemantic) {
+        val scalafixTask = if (isSemantic) {
           val names = rulesThatWillRun.map(_.name())
           scalafixSemantic(names, mainInterface, shell, config)
         } else {
           scalafixSyntactic(mainInterface, shell, config)
         }
+        scalafixTask.andFinally(
+          diagnosticsCacheWriter.write(targetDir, diagnosticsWriter)
+        )
       }
     }
     task.tag(Scalafix)

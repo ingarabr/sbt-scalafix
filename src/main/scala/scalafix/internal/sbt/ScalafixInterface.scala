@@ -7,7 +7,7 @@ import coursierapi.Repository
 import sbt._
 import sbt.internal.sbtscalafix.Compat
 import scalafix.interfaces.{Scalafix => ScalafixAPI, _}
-import scalafix.sbt.InvalidArgument
+import scalafix.sbt.{DiagnosticsCacheWriter, InvalidArgument}
 
 import scala.collection.JavaConverters._
 import scala.util.control.NonFatal
@@ -132,10 +132,17 @@ object ScalafixInterface {
       scalafixBinaryScalaVersion: String,
       scalafixDependencies: Seq[ModuleID],
       scalafixCustomResolvers: Seq[Repository],
+      scalafixConfigCacheWriter: DiagnosticsCacheWriter,
       logger: Logger = Compat.ConsoleLogger(System.out)
   ): () => ScalafixInterface =
     new LazyValue({ () =>
-      val callback = new ScalafixLogger(logger)
+      val scalafixLogger = new ScalafixLogger(logger)
+      val callback = new ScalafixMainCallback {
+        def reportDiagnostic(diagnostic: ScalafixDiagnostic): Unit = {
+          scalafixLogger.reportDiagnostic(diagnostic)
+          scalafixConfigCacheWriter.add(diagnostic)
+        }
+      }
       val scalafixArguments = ScalafixAPI
         .fetchAndClassloadInstance(
           scalafixBinaryScalaVersion,
